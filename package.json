@@ -1,4 +1,9 @@
 {
+  "scripts": {
+    "build": "next build && next export -o out"
+  }
+}
+{
   "name": "expo-app",
   "main": "expo-router/entry",
   "version": "1.0.0",
