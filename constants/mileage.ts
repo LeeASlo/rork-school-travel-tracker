@@ -1,0 +1,1 @@
+export const UK_COMPANY_VAN_RATE_PETROL = 0.14;
