@@ -2,16 +2,77 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/upload-pages-artifact@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # If bun.lock exists, use Bun; otherwise use npm
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          path: dist
-      - uses: actions/deploy-pages@v4
+          node-version: 20
+
+      - name: Setup Bun (if bun.lock exists)
+        if: ${{ hashFiles('bun.lock') != '' }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install deps & build
+        run: |
+          if [ -f "bun.lock" ]; then
+            echo "Using Bun…"
+            bun install
+            if bun run build; then
+              echo "Bun build OK"
+            else
+              echo "Bun build failed, trying npm…"
+              npm ci
+              npm run build
+            fi
+          else
+            echo "Using npm…"
+            npm ci
+            npm run build
+          fi
+
+      # Detect common build output folders that contain index.html
+      - name: Detect build output
+        id: detect
+        run: |
+          set -e
+          CANDIDATES=("dist" "out" "build" ".next/out" "public" ".")
+          FOUND=""
+          for d in "${CANDIDATES[@]}"; do
+            if [ -f "$d/index.html" ]; then
+              FOUND="$d"
+              break
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: No index.html found in dist/out/build/.next/out/public/.  Check your build step."
+            exit 1
+          fi
+          echo "path=$FOUND" >> $GITHUB_OUTPUT
+          echo "Detected build output: $FOUND"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.detect.outputs.path }}
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
