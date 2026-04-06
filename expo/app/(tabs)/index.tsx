@@ -1,6 +1,6 @@
 import { useWorkTracking } from '@/contexts/WorkTrackingContext';
 import { DayEntry, School } from '@/types/work';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,10 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, X, Save } from 'lucide-react-native';
+import { Plus, X, Save, Clock3 } from 'lucide-react-native';
 
 function formatDateForDisplay(date: Date): string {
   return date.toLocaleDateString('en-GB', {
@@ -45,6 +46,35 @@ function convert12To24Hour(time12: string, period: 'AM' | 'PM'): string {
   }
   return `${hours.toString().padStart(2, '0')}:${minutes}`;
 }
+
+function normalizeTimeInput(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 4);
+
+  if (digits.length === 0) {
+    return '';
+  }
+
+  if (digits.length <= 2) {
+    const hour = Math.min(12, Math.max(1, parseInt(digits, 10) || 0));
+    return hour > 0 ? hour.toString() : '';
+  }
+
+  const hourDigits = digits.slice(0, 2);
+  const minuteDigits = digits.slice(2, 4);
+  const hour = Math.min(12, Math.max(1, parseInt(hourDigits, 10) || 0));
+  const minutes = Math.min(59, parseInt(minuteDigits, 10) || 0);
+
+  return `${hour}:${minutes.toString().padStart(2, '0')}`;
+}
+
+function buildTimeDisplayLabel(time12: string, period: 'AM' | 'PM'): string {
+  return time12 ? `${time12} ${period}` : `Select time`;
+}
+
+const HOURS = Array.from({ length: 12 }, (_, index) => (index + 1).toString());
+const MINUTES = Array.from({ length: 12 }, (_, index) => (index * 5).toString().padStart(2, '0'));
+
+type TimeField = 'start' | 'end';
 
 export default function DailyEntryScreen() {
   const { addOrUpdateEntry, getEntryForDate, isSaving } = useWorkTracking();
@@ -106,6 +136,7 @@ export default function DailyEntryScreen() {
   const [comments, setComments] = useState<string>(
     existingEntry?.comments || ''
   );
+  const [activeTimeField, setActiveTimeField] = useState<TimeField | null>(null);
 
   const addSchool = () => {
     if (!newSchoolName.trim()) {
@@ -152,7 +183,77 @@ export default function DailyEntryScreen() {
   const endTime24 = convert12To24Hour(endTime12, endPeriod);
   const hoursWorked = isDayOff ? 7.2 : calculateHours(startTime24, endTime24);
 
+  const activeTimeValue = activeTimeField === 'start' ? startTime12 : endTime12;
+  const activePeriod = activeTimeField === 'start' ? startPeriod : endPeriod;
+  const selectedHour = activeTimeValue ? activeTimeValue.split(':')[0] : '';
+  const selectedMinute = activeTimeValue?.includes(':') ? activeTimeValue.split(':')[1] : '';
 
+  const timeHelperText = useMemo(() => {
+    if (startTime12 && endTime12) {
+      return 'Tap a time card to adjust hours, minutes, or AM/PM';
+    }
+
+    return 'Choose a start and end time to calculate hours automatically';
+  }, [endTime12, startTime12]);
+
+  const applyTimeSelection = (field: TimeField, value: string) => {
+    console.log('Applying time selection', { field, value });
+    if (field === 'start') {
+      setStartTime12(value);
+      return;
+    }
+
+    setEndTime12(value);
+  };
+
+  const openTimePicker = (field: TimeField) => {
+    console.log('Opening time picker', { field });
+    setActiveTimeField(field);
+  };
+
+  const closeTimePicker = () => {
+    console.log('Closing time picker');
+    setActiveTimeField(null);
+  };
+
+  const setTimeHour = (hour: string) => {
+    if (!activeTimeField) {
+      return;
+    }
+
+    const minute = selectedMinute || '00';
+    applyTimeSelection(activeTimeField, `${hour}:${minute}`);
+  };
+
+  const setTimeMinute = (minute: string) => {
+    if (!activeTimeField) {
+      return;
+    }
+
+    const hour = selectedHour || '9';
+    applyTimeSelection(activeTimeField, `${hour}:${minute}`);
+  };
+
+  const setActiveFieldPeriod = (period: 'AM' | 'PM') => {
+    if (!activeTimeField) {
+      return;
+    }
+
+    console.log('Setting active time period', { field: activeTimeField, period });
+
+    if (activeTimeField === 'start') {
+      setStartPeriod(period);
+      return;
+    }
+
+    setEndPeriod(period);
+  };
+
+  const handleTimeTextChange = (field: TimeField, value: string) => {
+    const normalizedValue = normalizeTimeInput(value);
+    console.log('Normalizing time input', { field, value, normalizedValue });
+    applyTimeSelection(field, normalizedValue);
+  };
 
   const handleSave = () => {
     if (isDayOff) {
@@ -320,6 +421,86 @@ export default function DailyEntryScreen() {
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <Modal
+          visible={activeTimeField !== null}
+          transparent
+          animationType="slide"
+          onRequestClose={closeTimePicker}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.timeModalCard}>
+              <View style={styles.timeModalHeader}>
+                <View>
+                  <Text style={styles.timeModalTitle}>
+                    {activeTimeField === 'start' ? 'Start Time' : 'End Time'}
+                  </Text>
+                  <Text style={styles.timeModalSubtitle}>Pick a time or type one below</Text>
+                </View>
+                <TouchableOpacity style={styles.timeModalCloseButton} onPress={closeTimePicker} testID="close-time-picker">
+                  <Text style={styles.timeModalCloseText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TextInput
+                style={styles.timeManualInput}
+                placeholder="9:00"
+                value={activeTimeValue}
+                onChangeText={(value) => {
+                  if (activeTimeField) {
+                    handleTimeTextChange(activeTimeField, value);
+                  }
+                }}
+                keyboardType="number-pad"
+                testID="time-manual-input"
+              />
+
+              <View style={styles.periodToggleRow}>
+                <TouchableOpacity
+                  style={[styles.periodToggleButton, activePeriod === 'AM' && styles.periodToggleButtonActive]}
+                  onPress={() => setActiveFieldPeriod('AM')}
+                  testID="time-period-am"
+                >
+                  <Text style={[styles.periodToggleText, activePeriod === 'AM' && styles.periodToggleTextActive]}>AM</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.periodToggleButton, activePeriod === 'PM' && styles.periodToggleButtonActive]}
+                  onPress={() => setActiveFieldPeriod('PM')}
+                  testID="time-period-pm"
+                >
+                  <Text style={[styles.periodToggleText, activePeriod === 'PM' && styles.periodToggleTextActive]}>PM</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.timePickerSectionTitle}>Hour</Text>
+              <View style={styles.timeOptionGrid}>
+                {HOURS.map((hour) => (
+                  <TouchableOpacity
+                    key={hour}
+                    style={[styles.timeOptionChip, selectedHour === hour && styles.timeOptionChipActive]}
+                    onPress={() => setTimeHour(hour)}
+                    testID={`time-hour-${hour}`}
+                  >
+                    <Text style={[styles.timeOptionChipText, selectedHour === hour && styles.timeOptionChipTextActive]}>{hour}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.timePickerSectionTitle}>Minute</Text>
+              <View style={styles.timeOptionGrid}>
+                {MINUTES.map((minute) => (
+                  <TouchableOpacity
+                    key={minute}
+                    style={[styles.timeOptionChip, selectedMinute === minute && styles.timeOptionChipActive]}
+                    onPress={() => setTimeMinute(minute)}
+                    testID={`time-minute-${minute}`}
+                  >
+                    <Text style={[styles.timeOptionChipText, selectedMinute === minute && styles.timeOptionChipTextActive]}>{minute}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+        </Modal>
         <View style={styles.section}>
           <TouchableOpacity
             style={styles.checkboxRow}
@@ -399,41 +580,30 @@ export default function DailyEntryScreen() {
         {!isDayOff && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Work Hours</Text>
-            <View style={styles.timeRow}>
-              <View style={styles.timeInput}>
-                <Text style={styles.label}>Start Time</Text>
-                <View style={styles.timeInputRow}>
-                  <TextInput
-                    style={[styles.input, styles.timeTextInput]}
-                    placeholder="9:00"
-                    value={startTime12}
-                    onChangeText={setStartTime12}
-                  />
-                  <TouchableOpacity
-                    style={styles.periodButton}
-                    onPress={() => setStartPeriod(startPeriod === 'AM' ? 'PM' : 'AM')}
-                  >
-                    <Text style={styles.periodButtonText}>{startPeriod}</Text>
-                  </TouchableOpacity>
+            <Text style={styles.timeHelperText}>{timeHelperText}</Text>
+            <View style={styles.timeCardRow}>
+              <TouchableOpacity
+                style={styles.timeCard}
+                onPress={() => openTimePicker('start')}
+                testID="start-time-card"
+              >
+                <View style={styles.timeCardLabelRow}>
+                  <Text style={styles.label}>Start Time</Text>
+                  <Clock3 size={16} color="#007AFF" />
                 </View>
-              </View>
-              <View style={styles.timeInput}>
-                <Text style={styles.label}>End Time</Text>
-                <View style={styles.timeInputRow}>
-                  <TextInput
-                    style={[styles.input, styles.timeTextInput]}
-                    placeholder="5:30"
-                    value={endTime12}
-                    onChangeText={setEndTime12}
-                  />
-                  <TouchableOpacity
-                    style={styles.periodButton}
-                    onPress={() => setEndPeriod(endPeriod === 'AM' ? 'PM' : 'AM')}
-                  >
-                    <Text style={styles.periodButtonText}>{endPeriod}</Text>
-                  </TouchableOpacity>
+                <Text style={styles.timeCardValue}>{buildTimeDisplayLabel(startTime12, startPeriod)}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.timeCard}
+                onPress={() => openTimePicker('end')}
+                testID="end-time-card"
+              >
+                <View style={styles.timeCardLabelRow}>
+                  <Text style={styles.label}>End Time</Text>
+                  <Clock3 size={16} color="#007AFF" />
                 </View>
-              </View>
+                <Text style={styles.timeCardValue}>{buildTimeDisplayLabel(endTime12, endPeriod)}</Text>
+              </TouchableOpacity>
             </View>
             {hoursWorked > 0 && (
               <View style={styles.hoursCard}>
@@ -782,32 +952,146 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600' as const,
   },
-  timeRow: {
+  timeHelperText: {
+    fontSize: 13,
+    color: '#5f6c7b',
+    marginBottom: 14,
+  },
+  timeCardRow: {
     flexDirection: 'row' as const,
     gap: 12,
   },
-  timeInput: {
+  timeCard: {
     flex: 1,
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: '#f5f9ff',
+    borderWidth: 1,
+    borderColor: '#d8e7ff',
   },
-  timeInputRow: {
+  timeCardLabelRow: {
     flexDirection: 'row' as const,
-    gap: 8,
-  },
-  timeTextInput: {
-    flex: 1,
-  },
-  periodButton: {
-    width: 60,
-    height: 44,
-    borderRadius: 8,
-    backgroundColor: '#007AFF',
     alignItems: 'center' as const,
-    justifyContent: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 10,
   },
-  periodButtonText: {
-    color: '#fff',
+  timeCardValue: {
+    fontSize: 22,
+    lineHeight: 28,
+    color: '#0f172a',
+    fontWeight: '700' as const,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    justifyContent: 'flex-end' as const,
+  },
+  timeModalCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 28,
+  },
+  timeModalHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 18,
+  },
+  timeModalTitle: {
+    fontSize: 20,
+    fontWeight: '700' as const,
+    color: '#0f172a',
+  },
+  timeModalSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 4,
+  },
+  timeModalCloseButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#edf4ff',
+  },
+  timeModalCloseText: {
+    color: '#007AFF',
     fontSize: 14,
+    fontWeight: '700' as const,
+  },
+  timeManualInput: {
+    height: 52,
+    borderWidth: 1,
+    borderColor: '#d8e7ff',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    fontSize: 18,
     fontWeight: '600' as const,
+    backgroundColor: '#f8fbff',
+    color: '#0f172a',
+    marginBottom: 16,
+  },
+  periodToggleRow: {
+    flexDirection: 'row' as const,
+    gap: 10,
+    marginBottom: 20,
+  },
+  periodToggleButton: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center' as const,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  periodToggleButtonActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  periodToggleText: {
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '700' as const,
+  },
+  periodToggleTextActive: {
+    color: '#ffffff',
+  },
+  timePickerSectionTitle: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '700' as const,
+    marginBottom: 10,
+  },
+  timeOptionGrid: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    gap: 10,
+    marginBottom: 18,
+  },
+  timeOptionChip: {
+    minWidth: 56,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center' as const,
+  },
+  timeOptionChipActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  timeOptionChipText: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '600' as const,
+  },
+  timeOptionChipTextActive: {
+    color: '#ffffff',
   },
   hoursCard: {
     marginTop: 16,
